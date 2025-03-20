@@ -190,18 +190,26 @@ class ModelService {
    * @param baseUrl The base URL of the provider
    * @param modelId Optional model ID for existing models
    * @param tempApiKey Optional API key for new models that don't have a modelId yet
+   * @param explicitProvider Optional provider type, used to apply provider-specific headers
    */
   async fetchProviderModels(
     baseUrl: string,
     modelId?: string,
-    tempApiKey?: string
+    tempApiKey?: string,
+    explicitProvider?: string
   ): Promise<NormalizedModel[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`);
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, explicitProvider: ${explicitProvider || 'not provided'}`);
     try {
-      // Determine provider from model or baseUrl
+      // Determine provider from explicit parameter, model, or baseUrl
       let provider: ModelProvider;
       
-      if (modelId) {
+      // If an explicit provider is provided, use it
+      if (explicitProvider) {
+        provider = explicitProvider as ModelProvider;
+        log.debug(`Using explicitly provided provider: ${provider}`);
+      }
+      // Otherwise, determine from model or baseUrl
+      else if (modelId) {
         log.debug(`Looking up model with ID: ${modelId}`);
         const models = await this.loadModels();
         const model = models.find(m => m.id === modelId);
@@ -216,7 +224,7 @@ class ModelService {
           log.debug(`Provider determined from URL as: ${provider}`);
         }
       } else {
-        // For new models, determine provider from baseUrl
+        // For new models without explicit provider, determine from baseUrl
         provider = getProviderFromBaseUrl(baseUrl);
         log.debug(`Provider determined from URL as: ${provider}`);
       }
@@ -238,12 +246,16 @@ class ModelService {
           log.debug(`Found model, resolving and decrypting API key`);
           // Resolve global vars and decrypt if needed
           apiKey = await resolveAndDecryptApiKey(model.encryptedApiKey);
-          log.debug(`API key successfully resolved and decrypted`);
+          if (apiKey) {
+            log.debug(`API key successfully resolved and decrypted`);
+          } else {
+            log.warn(`Failed to resolve or decrypt API key for model ID: ${modelId}`);
+          }
         } else {
           log.warn(`Model with ID ${modelId} not found for API key resolution`);
         }
       } else {
-        log.error(`No API key available - neither modelId nor tempApiKey provided`);
+        log.error(`No API key available - neither modelId (${modelId}) nor tempApiKey (${tempApiKey ? 'present' : 'not present'}) provided for baseUrl: ${baseUrl}`);
       }
       
       // Fetch models based on provider

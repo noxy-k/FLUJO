@@ -39,6 +39,9 @@ export interface ModelModalProps {
 }
 
 export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
+  // Log the model prop when the component initializes
+  log.debug("ModelModal initialized with model:", { modelId: model?.id, modelName: model?.name, isExistingModel: !!model });
+  
   const { globalEnvVars } = useStorage();
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -59,27 +62,35 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [openRouterModels, setOpenRouterModels] = useState<Array<{id: string, name: string, description?: string}>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [provider, setProvider] = useState<ModelProvider>('openai');
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   // Create a debounced function for name input
   const debouncedFetchModels = useCallback(
     debounce((baseUrl: string) => {
       if (baseUrl) {
-        log.info(`Debounced fetch models for ${baseUrl}`);
+        log.info(`Debounced fetch models for ${baseUrl}, modelId: ${model?.id || 'none'}`);
         fetchModels(baseUrl);
       }
     }, 500), // 500ms delay
-    []
+    [model] // Add model to the dependency array so it's recreated when model changes
   );
 
-  // Clear models list when modal opens
+  // Reset state when modal opens or closes
   useEffect(() => {
     if (open) {
+      // When modal opens, reset the models list and initialLoadComplete flag
       setOpenRouterModels([]);
+      setInitialLoadComplete(false);
+      log.debug("Modal opened, reset initialLoadComplete");
+    } else {
+      // When modal closes, reset the initialLoadComplete flag
+      setInitialLoadComplete(false);
+      log.debug("Modal closed, reset initialLoadComplete");
     }
   }, [open]);
 
   // Fetch models when baseUrl changes and set provider
   useEffect(() => {
-    log.debug("Base URL changed", { baseUrl });
+    log.debug("Base URL changed", { baseUrl, currentModelId: model?.id, initialLoadComplete });
     
     // Clear the models list when baseUrl changes
     setOpenRouterModels([]);
@@ -101,16 +112,29 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       setProvider('openai');
     }
     
-    if (baseUrl) {
+    // Only fetch models if initial load is complete
+    if (baseUrl && initialLoadComplete) {
       log.info(`Fetching models for ${baseUrl}`);
       fetchModels(baseUrl);
     }
-  }, [baseUrl]);
+  }, [baseUrl, model, initialLoadComplete]);
 
 const fetchModels = async (baseUrl: string) => {
-  log.debug("fetchModels called", { baseUrl, apiKey: apiKey ? "present" : "not present", isApiKeyBound });
+  // Capture the current model ID at the time of the function call
+  const currentModelId = model?.id;
+  
+  log.debug("fetchModels called", { 
+    baseUrl, 
+    apiKey: apiKey ? "present" : "not present", 
+    isApiKeyBound,
+    existingModel: currentModelId ? `ID: ${currentModelId}` : "none",
+    initialLoadComplete,
+    provider
+  });
+  
   setIsLoadingModels(true);
   setError(null);
+  
   try {
     // For new models, we need to pass the API key directly
     // For existing models, we use the model ID to look up the API key on the backend
@@ -125,20 +149,34 @@ const fetchModels = async (baseUrl: string) => {
       log.debug("Using API key from global variable:", boundToGlobalVar);
     }
     
-    const models = model 
-      ? await modelService.fetchProviderModels(baseUrl, model.id)
-      : await modelService.fetchProviderModels(baseUrl, undefined, actualApiKey);
-    
-    log.debug("API key passed to fetchProviderModels:", actualApiKey ? "yes" : "no");
-    
-    log.debug("Models fetched successfully", { count: models?.length });
-    
-    if (Array.isArray(models)) {
-      setOpenRouterModels(models);
-      log.info("Models set in state", { count: models.length });
+    // If we have an existing model, always pass its ID to ensure the API key can be looked up
+    if (currentModelId) {
+      log.debug(`Using existing model ID ${currentModelId} for API key lookup`);
+      const models = await modelService.fetchProviderModels(baseUrl, currentModelId);
+      log.debug(`Models fetched successfully for existing model ${currentModelId}`, { count: models?.length });
+      
+      if (Array.isArray(models)) {
+        setOpenRouterModels(models);
+        log.info("Models set in state", { count: models.length });
+      } else {
+        log.warn("Unexpected API response format", { models });
+        setOpenRouterModels([]);
+      }
     } else {
-      log.warn("Unexpected API response format", { models });
-      setOpenRouterModels([]);
+      // For new models, pass the API key directly along with the provider information
+      // Pass the API key as both tempApiKey and apiKey to ensure it's recognized
+      log.debug("Creating new model, using provided API key and provider:", provider);
+      const models = await modelService.fetchProviderModels(baseUrl, undefined, actualApiKey, provider, actualApiKey);
+      log.debug("API key passed to fetchProviderModels:", actualApiKey ? "yes" : "no");
+      log.debug("Models fetched successfully for new model", { count: models?.length });
+      
+      if (Array.isArray(models)) {
+        setOpenRouterModels(models);
+        log.info("Models set in state", { count: models.length });
+      } else {
+        log.warn("Unexpected API response format", { models });
+        setOpenRouterModels([]);
+      }
     }
   } catch (error) {
     log.warn("Error fetching models", { baseUrl, error });
@@ -152,6 +190,7 @@ const fetchModels = async (baseUrl: string) => {
   useEffect(() => {
     const loadModel = async () => {
       if (model) {
+        log.debug("Loading existing model data", { modelId: model.id, modelName: model.name });
         setName(model.name);
         setDisplayName(model.displayName || model.name); // Default to name if displayName is not set
         setDescription(model.description || '');
@@ -240,6 +279,10 @@ const fetchModels = async (baseUrl: string) => {
             setInfo('Error checking encryption status. Please re-enter your API key.');
           }
         }
+        
+        // Mark initial load as complete after all state is set
+        setInitialLoadComplete(true);
+        log.debug("Initial load complete for existing model", { modelId: model.id });
       } else {
         // New model setup
         setName('');
@@ -291,6 +334,10 @@ const fetchModels = async (baseUrl: string) => {
           log.error('Failed to check encryption status', { error });
           setInfo('Error checking encryption status. Your API key will still be encrypted.');
         }
+        
+        // Mark initial load complete for new model
+        setInitialLoadComplete(true);
+        log.debug("Initial load complete for new model");
       }
     };
     loadModel();
@@ -469,6 +516,7 @@ const fetchModels = async (baseUrl: string) => {
                     size="small" 
                     variant="outlined" 
                     onClick={() => {
+                      log.debug("OpenRouter button clicked");
                       setBaseUrl('https://openrouter.ai/api/v1');
                     }}
                   >
@@ -477,28 +525,40 @@ const fetchModels = async (baseUrl: string) => {
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://api.x.ai/v1')}
+                    onClick={() => {
+                      log.debug("X.ai button clicked");
+                      setBaseUrl('https://api.x.ai/v1');
+                    }}
                   >
                     X.ai
                   </Button>
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai/')}
+                    onClick={() => {
+                      log.debug("Gemini button clicked");
+                      setBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai/');
+                    }}
                   >
                     Gemini
                   </Button>
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://api.anthropic.com/v1/')}
+                    onClick={() => {
+                      log.debug("Anthropic button clicked");
+                      setBaseUrl('https://api.anthropic.com/v1/');
+                    }}
                   >
                     Anthropic
                   </Button>
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() => setBaseUrl('http://localhost:11434/v1')}
+                    onClick={() => {
+                      log.debug("Ollama button clicked");
+                      setBaseUrl('http://localhost:11434/v1');
+                    }}
                   >
                     Ollama
                   </Button>
@@ -554,12 +614,19 @@ const fetchModels = async (baseUrl: string) => {
                     setName(newValue || '');
                     setNameError('');
                   }}
-                  onInputChange={(_, newInputValue) => {
+                  onInputChange={(_, newInputValue, reason) => {
                     setName(newInputValue);
                     setNameError('');
                     
-                    // Trigger debounced fetch when typing in the technical name
-                    if (baseUrl && newInputValue) {
+                    // Only trigger fetch when the user is actively typing
+                    // This prevents the fetch when the component first renders
+                    if (baseUrl && newInputValue && reason === 'input') {
+                      log.debug("User typing in technical name field, triggering model fetch", {
+                        baseUrl,
+                        newInputValue,
+                        reason,
+                        modelId: model?.id
+                      });
                       debouncedFetchModels(baseUrl);
                     }
                   }}

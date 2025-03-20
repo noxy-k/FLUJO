@@ -157,17 +157,18 @@ export async function POST(req: NextRequest) {
       const { searchParams } = new URL(req.url);
       const baseUrl = searchParams.get('baseUrl');
       const modelId = searchParams.get('modelId');
+      const provider = body.provider; // Extract provider from request body
       
       if (!baseUrl) {
         return NextResponse.json({ error: 'Base URL is required' }, { status: 400 });
       }
       
-      log.debug(`POST: Fetching models for baseUrl: ${baseUrl} with temporary API key`);
+      log.debug(`POST: Fetching models for baseUrl: ${baseUrl} with temporary API key, provider: ${provider || 'not provided'}`);
       
       try {
         log.debug(`POST: Using temporary API key for baseUrl: ${baseUrl}`);
-        // Fetch models with the temporary API key
-        const models = await providerAdapter.fetchProviderModels(baseUrl, modelId || undefined, body.tempApiKey);
+        // Fetch models with the temporary API key and provider information
+        const models = await providerAdapter.fetchProviderModels(baseUrl, modelId || undefined, body.tempApiKey, provider);
         log.debug(JSON.stringify(models));
 
         // Return normalized response
