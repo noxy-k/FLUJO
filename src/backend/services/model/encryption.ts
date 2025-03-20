@@ -117,7 +117,18 @@ export async function decryptApiKey(encryptedApiKey: string): Promise<string | n
     }
     
     // Use the decryption utility
-    return await decryptWithPassword(encryptedApiKey);
+    const decryptResult = await decryptWithPassword(encryptedApiKey);
+    
+    // Check if decryption returned an error object
+    if (decryptResult && typeof decryptResult === 'object' && 'type' in decryptResult) {
+      log.warn('decryptApiKey: Decryption failed with error type:', { 
+        errorType: decryptResult.type, 
+        errorMessage: decryptResult.message 
+      });
+      return null;
+    }
+    
+    return decryptResult;
   } catch (error) {
     log.warn('decryptApiKey: Failed to decrypt API key:', error);
     return null;
@@ -127,27 +138,94 @@ export async function decryptApiKey(encryptedApiKey: string): Promise<string | n
 /**
  * Resolve and decrypt an API key
  * This handles both global variables and encrypted keys
+ * Returns the decrypted API key or null if decryption failed
  */
 export async function resolveAndDecryptApiKey(encryptedApiKey: string): Promise<string | null> {
-  log.debug('resolveAndDecryptApiKey: Entering method');
+  log.debug('resolveAndDecryptApiKey: Entering method', {
+    keyType: encryptedApiKey?.startsWith('${global:') ? 'global_variable' : 
+             encryptedApiKey?.startsWith('encrypted_failed:') ? 'encryption_failed_marker' : 
+             'encrypted_key',
+    keyLength: encryptedApiKey?.length || 0
+  });
+  
+  // Validate input
+  if (!encryptedApiKey) {
+    log.error('resolveAndDecryptApiKey: Empty or null API key provided');
+    return null;
+  }
+  
   try {
     // Check if this is a global variable reference
-    if (encryptedApiKey && encryptedApiKey.startsWith('${global:')) {
-      // Resolve the global variable
-      const resolvedVars = await resolveGlobalVars({ key: encryptedApiKey }) as Record<string, string>;
-      return resolvedVars.key;
+    if (encryptedApiKey.startsWith('${global:')) {
+      log.debug('resolveAndDecryptApiKey: Resolving global variable');
+      try {
+        const resolvedVars = await resolveGlobalVars({ key: encryptedApiKey }) as Record<string, string>;
+        if (!resolvedVars.key) {
+          log.error('resolveAndDecryptApiKey: Global variable resolved to empty value');
+          return null;
+        }
+        log.debug('resolveAndDecryptApiKey: Successfully resolved global variable');
+        return resolvedVars.key;
+      } catch (globalVarError) {
+        log.error('resolveAndDecryptApiKey: Failed to resolve global variable:', globalVarError);
+        return null;
+      }
     }
     
     // Check if this is a failed encryption marker
-    if (encryptedApiKey && encryptedApiKey.startsWith('encrypted_failed:')) {
-      // Return the original value without the marker
-      return encryptedApiKey.substring('encrypted_failed:'.length);
+    if (encryptedApiKey.startsWith('encrypted_failed:')) {
+      log.debug('resolveAndDecryptApiKey: Processing encryption failed marker');
+      const originalKey = encryptedApiKey.substring('encrypted_failed:'.length);
+      log.debug('resolveAndDecryptApiKey: Returning original value from failed encryption marker');
+      return originalKey;
+    }
+    
+    // Validate encrypted key format before attempting decryption
+    if (!encryptedApiKey.includes(':')) {
+      log.error('resolveAndDecryptApiKey: Invalid encrypted key format - missing delimiter');
+      return null;
     }
     
     // Use the decryption utility
-    return await decryptWithPassword(encryptedApiKey);
+    log.debug('resolveAndDecryptApiKey: Attempting to decrypt API key');
+    const decryptResult = await decryptWithPassword(encryptedApiKey);
+    
+    // Check if decryption returned an error object
+    if (decryptResult && typeof decryptResult === 'object' && 'type' in decryptResult) {
+      const errorObj = decryptResult;
+      log.error('resolveAndDecryptApiKey: Decryption failed with error type:', { 
+        errorType: errorObj.type, 
+        errorMessage: errorObj.message 
+      });
+      
+      // Log additional details based on error type
+      switch (errorObj.type) {
+        case 'dek_error':
+          log.error('resolveAndDecryptApiKey: Failed to get Data Encryption Key');
+          break;
+        case 'invalid_format':
+          log.error('resolveAndDecryptApiKey: Invalid encrypted key format');
+          break;
+        case 'decryption_failed':
+          log.error('resolveAndDecryptApiKey: Decryption operation failed');
+          break;
+        default:
+          log.error('resolveAndDecryptApiKey: Unknown decryption error');
+      }
+      
+      return null;
+    }
+    
+    // If we got here, decryptResult is either a string or null
+    if (!decryptResult) {
+      log.error('resolveAndDecryptApiKey: Decryption returned null');
+      return null;
+    }
+    
+    log.debug('resolveAndDecryptApiKey: Successfully decrypted API key');
+    return decryptResult;
   } catch (error) {
-    log.warn('resolveAndDecryptApiKey: Failed to resolve or decrypt API key:', error);
+    log.error('resolveAndDecryptApiKey: Unexpected error during API key resolution or decryption:', error);
     return null;
   }
 }
