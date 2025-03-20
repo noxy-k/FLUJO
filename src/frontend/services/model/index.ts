@@ -459,48 +459,84 @@ class ModelService {
    * @param baseUrl The base URL of the provider
    * @param modelId Optional model ID for existing models
    * @param tempApiKey Optional API key for new models that don't have a modelId yet
+   * @param provider Optional provider type, used to apply provider-specific headers
+   * @param apiKey Optional direct API key, used as a fallback if tempApiKey is not provided
    */
-  async fetchProviderModels(baseUrl: string, modelId?: string, tempApiKey?: string): Promise<any[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId}, tempApiKey present: ${!!tempApiKey}`);
+  async fetchProviderModels(baseUrl: string, modelId?: string, tempApiKey?: string, provider?: string, apiKey?: string): Promise<any[]> {
+    // Use either tempApiKey or apiKey, with tempApiKey taking precedence
+    const effectiveApiKey = tempApiKey || apiKey;
+    
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId || 'not provided'}, API key present: ${!!effectiveApiKey}, provider: ${provider || 'not provided'}`);
     try {
       // Build the URL with query parameters
       let url = `/api/model?action=fetchModels&baseUrl=${encodeURIComponent(baseUrl)}`;
+      
+      // Always include modelId in the URL if it's provided
+      // This is critical for existing models to look up their API keys
       if (modelId) {
+        log.debug(`fetchProviderModels: Including modelId ${modelId} in request URL`);
         url += `&modelId=${encodeURIComponent(modelId)}`;
+      } else {
+        log.debug('fetchProviderModels: No modelId provided, API key lookup will not be possible');
       }
+      
+      // Log the complete URL being requested
+      log.debug(`fetchProviderModels: Complete request URL: ${url}`);
       
       // For new models, we need to pass the API key directly
       // For existing models, we use the model ID to look up the API key on the backend
-      if (!modelId && tempApiKey) {
-        log.debug('fetchProviderModels: Using temporary API key for new model');
-        // Call the API to fetch provider models with the temporary API key
+      if (!modelId && effectiveApiKey) {
+        log.debug('fetchProviderModels: Using API key for new model');
+        // Call the API to fetch provider models with the API key and provider information
         const response = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            tempApiKey
+            tempApiKey: effectiveApiKey,
+            provider
           })
         });
         
         if (!response.ok) {
-          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
+          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}, ${response.statusText}`);
+          
+          // Try to get more details from the response
+          try {
+            const errorData = await response.json();
+            log.warn('fetchProviderModels: Error details:', errorData);
+          } catch (e) {
+            // Ignore if we can't parse the response
+          }
+          
           return []; // Return empty array instead of throwing
         }
         
         const data = await response.json();
+        log.debug(`fetchProviderModels: Successfully fetched ${data.data?.length || 0} models with temporary API key`);
         return data.data || [];
       } else {
         // Call the API to fetch provider models normally for existing models
+        log.debug(`fetchProviderModels: Making GET request to ${url}`);
         const response = await fetch(url);
         
         if (!response.ok) {
-          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
+          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}, ${response.statusText}`);
+          
+          // Try to get more details from the response
+          try {
+            const errorData = await response.json();
+            log.warn('fetchProviderModels: Error details:', errorData);
+          } catch (e) {
+            // Ignore if we can't parse the response
+          }
+          
           return []; // Return empty array instead of throwing
         }
         
         const data = await response.json();
+        log.debug(`fetchProviderModels: Successfully fetched ${data.data?.length || 0} models`);
         return data.data || [];
       }
     } catch (error) {

@@ -136,9 +136,88 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
 
 
 /**
+ * Fetch models from Anthropic
+ */
+export async function fetchAnthropicModels(apiKey: string | null, baseUrl: string): Promise<NormalizedModel[]> {
+  log.debug('fetchAnthropicModels: Entering method');
+  
+  // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
+  let modelsUrl = baseUrl;
+  if (!modelsUrl.endsWith('/v1') && !modelsUrl.endsWith('/v1/')) {
+    modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}v1` : `${modelsUrl}/v1`;
+  }
+  // Remove trailing slash if present before adding /models
+  modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}models` : `${modelsUrl}/models`;
+  
+  log.debug(`Fetching models from: ${modelsUrl}`);
+  
+  // Prepare headers
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'anthropic-version': '2023-06-01'  // Required by Anthropic API
+  };
+  
+  // Add x-api-key header if API key is provided
+  if (apiKey) {
+    headers['x-api-key'] = apiKey;
+  } else {
+    log.warn('No API key provided for Anthropic models fetch');
+  }
+  
+  try {
+    log.debug(`Making request to ${modelsUrl} with headers:`, { 
+      contentType: headers['Content-Type'],
+      accept: headers['Accept'],
+      hasApiKey: !!apiKey
+    });
+    
+    const response = await fetch(modelsUrl, { headers });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      log.error(`Anthropic API error: ${response.status} ${response.statusText}`, { errorText });
+      throw new Error(`Anthropic API error: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    log.debug('Anthropic API response:', data);
+    
+    // Parse Anthropic's response format
+    if (data.data && Array.isArray(data.data)) {
+      log.debug('Successfully parsed response in Anthropic format');
+      
+      return data.data.map((model: any) => ({
+        id: model.id,
+        name: model.display_name || model.id,
+        description: `Anthropic ${model.id}`
+      }));
+    }
+    
+    // Fallback to check for models property (though Anthropic doesn't use this format)
+    if (data.models && Array.isArray(data.models)) {
+      log.debug('Successfully parsed response in alternative format');
+      
+      return data.models.map((model: any) => ({
+        id: model.id,
+        name: model.display_name || model.id,
+        description: `Anthropic ${model.id}`
+      }));
+    }
+    
+    // If we can't parse the response in any expected format, return an empty array
+    log.warn('Could not parse Anthropic API response in expected format', { data });
+    return [];
+  } catch (error) {
+    log.error(`Error fetching models from ${modelsUrl}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Fetch models from the specified provider
  * Since most providers are now OpenAI-compatible, we only need special handling
- * for OpenRouter, and use the OpenAI-compatible API for everything else
+ * for OpenRouter and Anthropic, and use the OpenAI-compatible API for everything else
  */
 export async function fetchModelsFromProvider(
   provider: ModelProvider, 
@@ -148,9 +227,11 @@ export async function fetchModelsFromProvider(
   log.debug(`fetchModelsFromProvider: Fetching models for provider: ${provider}`);
   
   try {
-    // Only OpenRouter has a special endpoint for fetching models
+    // Special handling for different providers
     if (provider === 'openrouter') {
       return await fetchOpenRouterModels();
+    } else if (provider === 'anthropic') {
+      return await fetchAnthropicModels(apiKey, baseUrl);
     }
     
     // For all other providers (including Ollama), use the OpenAI-compatible API
