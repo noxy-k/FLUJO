@@ -23,7 +23,10 @@ export {
   migrateToUserEncryption,
   changeEncryptionPassword,
   verifyPassword,
-  logout
+  logout,
+  isUserEncryptionEnabled,
+  getEncryptionType,
+  authenticate
 } from './encryptionKeyManager';
 
 // Re-export encryption operations

@@ -645,6 +645,33 @@ export async function verifyPassword(password: string): Promise<string | null> {
 }
 
 /**
+ * Check if user encryption is enabled
+ */
+export async function isUserEncryptionEnabled(): Promise<boolean> {
+  log.debug('isUserEncryptionEnabled: Entering method');
+  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
+  return metadata !== null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+}
+
+/**
+ * Get the current encryption type
+ */
+export async function getEncryptionType(): Promise<EncryptionType | null> {
+  log.debug('getEncryptionType: Entering method');
+  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
+  return metadata ? metadata[ENCRYPTION_TYPE] || null : null;
+}
+
+/**
+ * Authenticate with a password
+ * This is a wrapper around verifyPassword that returns a token if successful
+ */
+export async function authenticate(password: string): Promise<string | null> {
+  log.debug('authenticate: Entering method');
+  return verifyPassword(password);
+}
+
+/**
  * Invalidate the current session
  * @param token The session token to invalidate
  */
