@@ -185,6 +185,179 @@ export class ModelHandler {
   /**
    * Generate completion using model service - pure function
    */
+  /**
+   * Generate completion using Anthropic API - pure function
+   * This method handles the specific requirements of the Anthropic API
+   */
+  private static async generateAnthropicCompletion(
+    model: any,
+    apiKey: string,
+    prompt: string,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    temperature: number,
+    tools?: OpenAI.ChatCompletionTool[]
+  ): Promise<Result<ModelCallResult>> {
+    log.debug('Using Anthropic-specific API call');
+    
+    try {
+      // Validate API key
+      if (!apiKey) {
+        log.error('No API key provided for Anthropic API call');
+        return {
+          success: false,
+          error: createModelError(
+            'api_key_error',
+            'No API key provided for Anthropic API call',
+            model.id
+          )
+        };
+      }
+      
+      // Log API key format (without revealing the actual key)
+      log.debug('Anthropic API key format check:', {
+        keyLength: apiKey.length,
+        startsWithPrefix: apiKey.startsWith('sk-'),
+        isAnthropicFormat: apiKey.startsWith('sk-ant')
+      });
+      
+      // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
+      let baseUrl = model.baseUrl;
+      if (!baseUrl.endsWith('/v1') && !baseUrl.endsWith('/v1/')) {
+        baseUrl = baseUrl.endsWith('/') ? `${baseUrl}v1` : `${baseUrl}/v1`;
+      }
+      
+      // Use the messages endpoint for Anthropic
+      const messagesUrl = baseUrl.endsWith('/') ? `${baseUrl}messages` : `${baseUrl}/messages`;
+      
+      log.debug(`Making Anthropic API request to: ${messagesUrl}`);
+      
+      // Convert OpenAI messages format to Anthropic format
+      // For simplicity, we'll just use the last user message
+      // In a full implementation, you'd want to properly convert the entire conversation
+      const userMessages = messages.filter(msg => msg.role === 'user');
+      const lastUserMessage = userMessages[userMessages.length - 1];
+      
+      // Prepare the request body
+      const requestBody = {
+        model: model.name,
+        messages: [
+          {
+            role: 'user',
+            content: lastUserMessage?.content || prompt
+          }
+        ],
+        temperature: temperature,
+        max_tokens: 1024
+      };
+      
+      // Prepare headers for Anthropic API
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01'
+      };
+      
+      // Always add the API key as x-api-key header (Anthropic's expected format)
+      headers['x-api-key'] = apiKey;
+      
+      // Log the headers we're using (without the actual API key value)
+      log.debug('Using Anthropic API headers:', {
+        contentType: headers['Content-Type'],
+        hasApiKey: true,
+        anthropicVersion: headers['anthropic-version']
+      });
+      
+      // Make the API request with the prepared headers
+      const response = await fetch(messagesUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        log.error(`Anthropic API error: ${response.status} ${response.statusText}`, { 
+          errorText,
+          requestUrl: messagesUrl,
+          hasApiKey: !!apiKey,
+          apiKeyLength: apiKey ? apiKey.length : 0,
+          modelName: model.name
+        });
+        
+        // Try to parse the error response for more details
+        let parsedError = null;
+        try {
+          parsedError = JSON.parse(errorText);
+          log.debug('Parsed Anthropic error response:', parsedError);
+        } catch (e) {
+          log.debug('Could not parse Anthropic error response as JSON');
+        }
+        
+        return {
+          success: false,
+          error: createModelError(
+            'api_error',
+            `Anthropic API error: ${response.status} ${response.statusText}`,
+            model.id,
+            undefined,
+            {
+              status: response.status,
+              type: 'anthropic_error',
+              details: errorText,
+              parsedError
+            }
+          )
+        };
+      }
+      
+      const data = await response.json();
+      log.debug('Anthropic API response:', data);
+      
+      // Create a simplified response and use type assertion to avoid TypeScript errors
+      // We don't need to fully match the OpenAI type, just provide what our code uses
+      const openAICompatibleResponse = {
+        id: data.id || `anthropic-${Date.now()}`,
+        object: 'chat.completion',
+        created: Date.now(),
+        model: model.name,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: data.content?.[0]?.text || ''
+            },
+            finish_reason: "stop" as const,
+            logprobs: null
+          }
+        ]
+      } as unknown as OpenAI.ChatCompletion;
+      
+      // Return the result in the expected format
+      return {
+        success: true,
+        value: {
+          content: data.content?.[0]?.text || '',
+          messages: [...messages],
+          fullResponse: openAICompatibleResponse
+        }
+      };
+    } catch (error) {
+      log.error(`Error in Anthropic API call: ${error instanceof Error ? error.message : String(error)}`);
+      
+      return {
+        success: false,
+        error: createModelError(
+          'unknown_error',
+          error instanceof Error ? error.message : String(error),
+          model.id
+        )
+      };
+    }
+  }
+
+  /**
+   * Generate completion using model service - pure function
+   */
   private static async generateCompletion(
     modelId: string,
     prompt: string,
@@ -227,6 +400,20 @@ export class ModelHandler {
           )
         };
       }
+      
+      // Check if this is an Anthropic model
+      if (model.provider === 'anthropic') {
+        log.debug('Detected Anthropic model, using Anthropic-specific API call');
+        return this.generateAnthropicCompletion(
+          model,
+          decryptedApiKey,
+          prompt,
+          messages,
+          temperature,
+          tools
+        );
+      }
+      
       log.verbose(`decrypted api key ${decryptedApiKey}`)
       log.verbose(` baseurl ${model.baseUrl}`)
       // Initialize the OpenAI client
