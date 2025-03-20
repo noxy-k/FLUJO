@@ -11,15 +11,17 @@ const log = createLogger('app/api/model/provider-adapter');
  * @param baseUrl The base URL of the provider
  * @param modelId Optional model ID for existing models
  * @param tempApiKey Optional API key for new models that don't have a modelId yet
+ * @param provider Optional provider type, used to apply provider-specific headers
  */
 export async function fetchProviderModels(
   baseUrl: string,
   modelId?: string,
-  tempApiKey?: string
+  tempApiKey?: string,
+  provider?: string
 ): Promise<NormalizedModel[]> {
-  log.debug(`fetchProviderModels: Delegating to backend service for baseUrl: ${baseUrl}`);
+  log.debug(`fetchProviderModels: Delegating to backend service for baseUrl: ${baseUrl}, provider: ${provider || 'not provided'}`);
   try {
-    return await modelService.fetchProviderModels(baseUrl, modelId, tempApiKey);
+    return await modelService.fetchProviderModels(baseUrl, modelId, tempApiKey, provider);
   } catch (error) {
     log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
     // Return empty array instead of throwing to avoid UI errors
